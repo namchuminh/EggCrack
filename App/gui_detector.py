@@ -17,7 +17,11 @@ CONF_THRESH = 0.1
 CLASSIFIER_IMG_SIZE = (256, 256)
 MIN_ROI_SIZE = 0
 
-BROKEN_THRESH = 0.99
+# Default threshold (video file)
+BROKEN_THRESH_DEFAULT = 0.99
+# Override threshold for Camera 0
+BROKEN_THRESH_CAMERA0 = 0.88
+
 ROI_PAD_RATIO = 0.0
 
 # Stability rule:
@@ -35,9 +39,11 @@ class VideoWorker(QtCore.QThread):
     frame_ready = QtCore.pyqtSignal(QtGui.QImage)
     status_ready = QtCore.pyqtSignal(str)
 
-    def __init__(self, source):
+    def __init__(self, source, broken_thresh: float):
         super().__init__()
         self.source = source
+        self.broken_thresh = float(broken_thresh)
+
         self.running = True
         self.paused = False
 
@@ -76,7 +82,7 @@ class VideoWorker(QtCore.QThread):
         # reset
         self.id_lock.clear()
         self.id_run.clear()
-        self.status_ready.emit("🟢 ĐANG CHẠY")
+        self.status_ready.emit(f"🟢 ĐANG CHẠY")
 
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
@@ -95,7 +101,7 @@ class VideoWorker(QtCore.QThread):
             if w0 != w or h0 != h:
                 w, h = w0, h0
 
-            # detect + track on full frame (no zone)
+            # detect + track on full frame
             results = yolo.track(frame, imgsz=IMGSZ, conf=CONF_THRESH, persist=True, verbose=False)
 
             if results and results[0].boxes:
@@ -128,7 +134,7 @@ class VideoWorker(QtCore.QThread):
                     x = np.expand_dims(x, axis=0)
 
                     prob = float(clf.predict(x, verbose=0)[0][0])
-                    cur_state = 1 if prob > BROKEN_THRESH else 0  # 1=VỠ, 0=NGUYÊN
+                    cur_state = 1 if prob > self.broken_thresh else 0  # 1=VỠ, 0=NGUYÊN
 
                     # stable lock
                     show_state = cur_state
@@ -264,7 +270,7 @@ class MainWindow(QtWidgets.QMainWindow):
         lblTitle.setObjectName("h1")
         lblTitle.setProperty("id", "h1")
 
-        lblSub = QtWidgets.QLabel("YOLO detect + MobileNetV2 classify | No stats | No zone")
+        lblSub = QtWidgets.QLabel("YOLO detect + MobileNetV2 classify | No stats | Threshold by source")
         lblSub.setObjectName("muted")
         lblSub.setProperty("id", "muted")
 
@@ -349,9 +355,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btnCam0.setEnabled(not running)
         self.btnSelect.setEnabled(not running)
 
-    def _start_worker(self, source, status_text):
+    def _start_worker(self, source, status_text, broken_thresh: float):
         self.stop()
-        self.worker = VideoWorker(source)
+        self.worker = VideoWorker(source, broken_thresh=broken_thresh)
         self.worker.frame_ready.connect(self.show_frame)
         self.worker.status_ready.connect(self._set_status)
         self.worker.start()
@@ -368,13 +374,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def open_camera0(self):
         self.video_path = None
-        self._start_worker(0, "🟢 CAMERA 0 ĐANG CHẠY")
+        self._start_worker(
+            0,
+            f"🟢 CAMERA 0 ĐANG CHẠY | BROKEN_THRESH={BROKEN_THRESH_CAMERA0:.2f}",
+            broken_thresh=BROKEN_THRESH_CAMERA0
+        )
 
     def start_video(self):
         if not self.video_path:
             QtWidgets.QMessageBox.warning(self, "Lỗi", "Chưa chọn video!")
             return
-        self._start_worker(self.video_path, "🟢 VIDEO ĐANG CHẠY")
+        self._start_worker(
+            self.video_path,
+            f"🟢 VIDEO ĐANG CHẠY | BROKEN_THRESH={BROKEN_THRESH_DEFAULT:.2f}",
+            broken_thresh=BROKEN_THRESH_DEFAULT
+        )
 
     def pause(self):
         if not self.worker:
